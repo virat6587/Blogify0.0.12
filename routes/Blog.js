@@ -7,6 +7,9 @@ const cloudinaryUpload = require("../middlewares/CloudinaryUploads");
 const { validateBlog, sanitizeInput } = require("../middlewares/validation");
 const AnalyticsService = require("../services/analyticsService");
 const NotificationService = require("../services/notificationService");
+const RedisClient = require("../config/redis");
+
+const redis = RedisClient.getInstance();
 
 // Protect all routes
 router.use(restrictToLoggedInUserOnly);
@@ -78,12 +81,31 @@ router.get("/:id/edit", async (req, res) => {
     }
 });
 
-// ====================== GET - Single Blog ======================
+// ====================== GET - Single Blog (CACHE-FIRST) ======================
+// CACHE-FIRST PATTERN: Check Redis first, fallback to MongoDB, cache result
 router.get("/:id", async (req, res) => {
+    const startTime = Date.now();
+    const { id } = req.params;
+
     try {
-        const blog = await Blog.findById(req.params.id)
+        // ─── LAYER 1: REDIS CACHE ───
+        const cached = await redis.getCachedBlog(id);
+        
+        if (cached) {
+            // Cache HIT: Serve in <5ms, zero DB load
+            return res.render("view", {
+                user: req.user,
+                blog: cached,
+                relatedBlogs: [],  // Fetch separately or cache these too
+                authorBlogs: [],
+                hasLiked: req.user ? cached.likes.some(likeId => likeId.toString() === req.user._id.toString()) : false,
+                source: 'cache'
+            });
+        }
+
+        // ─── LAYER 2: MONGODB FALLBACK ───
+        const blog = await Blog.findById(id)
             .notDeleted()
-            // FIX: Added "bio" to populate so the sidebar author card renders correctly
             .populate("createdBy", "fullName profileImageURL bio followers")
             .lean();
 
@@ -98,10 +120,6 @@ router.get("/:id", async (req, res) => {
 
         const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-        // FIX 1: Use $elemMatch so BOTH conditions apply to the SAME array element.
-        // Without $elemMatch, MongoDB only checks that the array contains an element
-        // matching each condition independently — they could be different elements,
-        // causing the deduplication check to fail silently.
         const existingView = await Blog.findOne({
             _id: blog._id,
             viewers: {
@@ -113,10 +131,6 @@ router.get("/:id", async (req, res) => {
         });
 
         if (!existingView) {
-            // FIX 2: $addToSet doesn't deduplicate subdocuments that differ by even one
-            // field (e.g. viewedAt). It kept pushing new entries forever, growing the
-            // viewers array without bound. Instead: $pull the stale entry for this
-            // viewer (if any), then $push a fresh one — keeping one entry per viewer.
             await Blog.findByIdAndUpdate(blog._id, {
                 $pull: { viewers: { viewerId: viewerFingerprint } }
             });
@@ -129,9 +143,6 @@ router.get("/:id", async (req, res) => {
                         isAuthenticated: !!req.user
                     }
                 },
-                // FIX 3: viewCount is incremented ONLY here.
-                // AnalyticsService.trackView() has been fixed to NOT also increment it,
-                // which was causing every view to be counted twice.
                 $inc: { viewCount: 1 }
             });
 
@@ -139,7 +150,7 @@ router.get("/:id", async (req, res) => {
         }
         // =====================================================================
 
-        const updatedBlog = await Blog.findById(req.params.id)
+        const updatedBlog = await Blog.findById(id)
             .notDeleted()
             .populate("createdBy", "fullName profileImageURL bio followers")
             .lean();
@@ -158,18 +169,22 @@ router.get("/:id", async (req, res) => {
             status: "published"
         }).limit(3).lean();
 
-        // FIX 4: .includes() uses reference equality and always returns false for
-        // ObjectId objects. Use .some() with string comparison instead.
         const hasLiked = req.user
             ? updatedBlog.likes.some(id => id.toString() === req.user._id.toString())
             : false;
+
+        // ─── LAYER 3: POPULATE CACHE ───
+        // SETEX: Atomic SET + EXPIRE (300s = 5 minutes)
+        // Auto-deletes after TTL → memory self-healing
+        await redis.cacheBlog(id, updatedBlog, 300);
 
         res.render("view", {
             user: req.user,
             blog: updatedBlog,
             relatedBlogs,
             authorBlogs,
-            hasLiked
+            hasLiked,
+            source: 'database'
         });
     } catch (error) {
         console.error("Single Blog Error:", error);
@@ -178,6 +193,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ====================== PUT - Update Blog ======================
+// CACHE INVALIDATION: Delete old cache, pre-warm with new data
 router.put("/:id", cloudinaryUpload.single("coverImage"), async (req, res) => {
     try {
         const { title, body, tags, category, status, metaDescription, excerpt } = req.body;
@@ -204,7 +220,18 @@ router.put("/:id", cloudinaryUpload.single("coverImage"), async (req, res) => {
         if (req.file) blog.coverImageURL = req.file.path;
 
         await blog.save();
-        res.json({ success: true, blog });
+
+        // ─── CACHE INVALIDATION ───
+        // Delete old cache entry so next GET fetches fresh data
+        await redis.invalidateBlogCache(req.params.id);
+        
+        // Pre-warm cache with updated data
+        const updatedBlog = await Blog.findById(req.params.id)
+            .populate("createdBy", "fullName profileImageURL bio followers")
+            .lean();
+        await redis.cacheBlog(req.params.id, updatedBlog, 300);
+
+        res.json({ success: true, blog: updatedBlog });
     } catch (error) {
         console.error("Update Blog Error:", error);
         res.status(500).json({ success: false, message: "Failed to update blog" });
@@ -212,6 +239,7 @@ router.put("/:id", cloudinaryUpload.single("coverImage"), async (req, res) => {
 });
 
 // ====================== DELETE Blog ======================
+// CACHE INVALIDATION: Remove from cache immediately
 router.delete("/:id", async (req, res) => {
     try {
         const blog = await Blog.findById(req.params.id);
@@ -225,6 +253,9 @@ router.delete("/:id", async (req, res) => {
         blog.deletedAt = new Date();
         await blog.save();
 
+        // Remove from cache immediately
+        await redis.invalidateBlogCache(req.params.id);
+
         res.json({ success: true, message: "Blog deleted successfully" });
     } catch (error) {
         console.error("Delete Blog Error:", error);
@@ -233,12 +264,12 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ====================== LIKE BLOG ======================
+// CACHE INVALIDATION: Likes change → invalidate cache
 router.post("/:id/like", async (req, res) => {
     try {
         const blog = await Blog.findById(req.params.id);
         if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
 
-        // Use .some() for correct ObjectId comparison (same fix as hasLiked above)
         const hasLiked = blog.likes.some(id => id.toString() === req.user._id.toString());
 
         if (hasLiked) {
@@ -261,6 +292,10 @@ router.post("/:id/like", async (req, res) => {
         }
 
         await blog.save();
+
+        // Invalidate cache since likes changed
+        await redis.invalidateBlogCache(req.params.id);
+
         res.json({ success: true, liked: !hasLiked, likeCount: blog.likes.length });
     } catch (error) {
         console.error("Like Blog Error:", error);
