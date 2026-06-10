@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
-const { sendOTPEmail, sendResetPasswordEmail } = require('../services/email');
+const { sendOTPEmail, sendResetPasswordEmail, sendWelcomeEmail } = require('../services/email');
 const { creatTokenForUser } = require('../services/authentication');
+const { emailQueue } = require('../services/queue');
 const crypto = require('crypto');
-const { loginLimiter, otpLimiter } = require('../middlewares/rateLimiting');
+const { loginLimiter, otpLimiter, signupLimiter } = require('../middlewares/rateLimiting');
 const { validateEmail } = require('../middlewares/validation');
 
 // In-memory stores (for production, use Redis or database)
@@ -23,9 +24,9 @@ router.post('/test-email', async (req, res) => {
     }
 
     try {
-        console.log(`\n🧪 ========== TESTING EMAIL SEND ==========`);
-        console.log(`🧪 Target Email: ${email}`);
-        console.log(`🧪 Sender Email: ${process.env.EMAIL_USER}`);
+        console.log(`\n========== TESTING EMAIL SEND ==========`);
+        console.log(`Target Email: ${email}`);
+        console.log(`Sender Email: ${process.env.EMAIL_USER}`);
         
         const testOTP = '123456';
         await sendOTPEmail(email, testOTP);
@@ -35,9 +36,9 @@ router.post('/test-email', async (req, res) => {
             message: `Test email sent to ${email}. Check your inbox!` 
         });
     } catch (error) {
-        console.error(`\n🧪 ========== TEST EMAIL FAILED ==========`);
-        console.error(`🧪 Error: ${error.message}`);
-        console.error(`🧪 Full Error:`, error);
+        console.error(`\n========== TEST EMAIL FAILED ==========`);
+        console.error(`Error: ${error.message}`);
+        console.error(`Full Error:`, error);
         
         return res.status(500).json({ 
             success: false, 
@@ -91,7 +92,7 @@ router.post('/signin', loginLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Signin Error:", error.message);
+        console.error("Signin Error:", error.message);
         res.status(401).json({ 
             success: false, 
             message: error.message || "Invalid email or password" 
@@ -122,7 +123,7 @@ router.get('/signup', (req, res) => {
     res.render('signup', { error: null });
 });
 
-// ====================== SEND OTP ======================
+// ====================== SEND OTP (NON-BLOCKING) ======================
 router.post('/send-otp', otpLimiter, async (req, res) => {
     const { email } = req.body;
 
@@ -133,60 +134,32 @@ router.post('/send-otp', otpLimiter, async (req, res) => {
         });
     }
 
-    try {
-        const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = email.toLowerCase().trim();
 
-        const existingUser = await User.findOne({ email: normalizedEmail });
-        if (existingUser) {
-            return res.status(409).json({
-                success: false,
-                message: "Email already registered. Please login instead."
-            });
-        }
-
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const expires = Date.now() + 5 * 60 * 1000;
-
-        otpStore.set(normalizedEmail, { otp, expires });
-
-        console.log(`\n🔐 ========== OTP STORAGE ==========`);
-        console.log(`🔐 Email: ${normalizedEmail}`);
-        console.log(`🔐 OTP: ${otp}`);
-        console.log(`🔐 Stored OTPs Count: ${otpStore.size}`);
-        console.log(`🔐 ==================================\n`);
-
-        try {
-            await sendOTPEmail(normalizedEmail, otp);
-        } catch (emailError) {
-            console.error("\n❌ ========== OTP EMAIL ERROR ==========");
-            console.error(`❌ Email: ${normalizedEmail}`);
-            console.error(`❌ Error: ${emailError.message}`);
-            console.error(`❌ Error Code: ${emailError.code}`);
-            console.error(`❌ Error Response: ${emailError.response}`);
-            console.error("❌ =====================================\n");
-            
-            return res.status(500).json({ 
-                success: false, 
-                message: `Email service error: ${emailError.message}. Error Code: ${emailError.code}` 
-            });
-        }
-
-        res.json({ 
-            success: true, 
-            message: 'OTP sent successfully to your email. It will expire in 5 minutes.' 
-        });
-
-    } catch (error) {
-        console.error("❌ Send OTP Error:", error.message);
-        res.status(500).json({ 
+    // Fast lean projection: only fetch _id to check existence
+    const existingUser = await User.findOne({ email: normalizedEmail }).lean().select('_id');
+    if (existingUser) {
+        return res.status(409).json({ 
             success: false, 
-            message: error.message || 'Failed to send OTP. Please try again.' 
+            message: "Email already registered. Please login instead." 
         });
     }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = Date.now() + 5 * 60 * 1000;
+    otpStore.set(normalizedEmail, { otp, expires });
+
+    // QUEUE: Do not await SMTP. Respond immediately.
+    emailQueue.add(() => sendOTPEmail(normalizedEmail, otp));
+
+    return res.status(202).json({ 
+        success: true, 
+        message: "OTP is being sent to your email. It expires in 5 minutes." 
+    });
 });
 
-// ====================== POST SIGNUP ======================
-router.post('/signup', async (req, res) => {
+// ====================== POST SIGNUP (OPTIMIZED) ======================
+router.post('/signup', signupLimiter, async (req, res) => {
     const { fullName, email, password, otp } = req.body;
 
     if (!fullName || !email || !password || !otp) {
@@ -196,67 +169,53 @@ router.post('/signup', async (req, res) => {
         });
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+
+    if (!validateEmail(normalizedEmail)) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "Invalid email format" 
+        });
+    }
+
+    if (password.length < 6) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "Password must be at least 6 characters" 
+        });
+    }
+
+    // Verify OTP from memory store (replace with Redis for multi-instance)
+    const stored = otpStore.get(normalizedEmail);
+    if (!stored) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "No OTP found. Please request a new one." 
+        });
+    }
+    if (stored.otp !== otp) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "Invalid OTP" 
+        });
+    }
+    if (stored.expires < Date.now()) {
+        otpStore.delete(normalizedEmail);
+        return res.status(400).json({ 
+            success: false, 
+            message: "OTP has expired. Please request a new one." 
+        });
+    }
+
     try {
-        const normalizedEmail = email.toLowerCase().trim();
-
-        if (!validateEmail(normalizedEmail)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Invalid email format" 
-            });
-        }
-
-        if (password.length < 6) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Password must be at least 6 characters" 
-            });
-        }
-
-        const stored = otpStore.get(normalizedEmail);
-        
-        console.log(`\n🔐 ========== OTP VERIFICATION ==========`);
-        console.log(`🔐 Email: ${normalizedEmail}`);
-        console.log(`🔐 Provided OTP: ${otp}`);
-        console.log(`🔐 Stored OTP: ${stored ? stored.otp : 'NOT FOUND'}`);
-        console.log(`🔐 ==================================\n`);
-        
-        if (!stored) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "No OTP found. Please request a new one." 
-            });
-        }
-
-        if (stored.otp !== otp) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Invalid OTP" 
-            });
-        }
-
-        if (stored.expires < Date.now()) {
-            otpStore.delete(normalizedEmail);
-            return res.status(400).json({ 
-                success: false, 
-                message: "OTP has expired. Please request a new one." 
-            });
-        }
-
-        const existingUser = await User.findOne({ email: normalizedEmail });
-        if (existingUser) {
-            return res.status(409).json({ 
-                success: false, 
-                message: "Email already registered. Please login instead." 
-            });
-        }
-
+        // ATOMIC: Unique index on email guarantees no duplicates. No pre-check needed.
         const user = await User.create({
             fullName: fullName.trim(),
             email: normalizedEmail,
             password
         });
 
+        // Cleanup OTP immediately
         otpStore.delete(normalizedEmail);
 
         const token = creatTokenForUser(user);
@@ -268,17 +227,28 @@ router.post('/signup', async (req, res) => {
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
-        res.json({ 
+        // OFFLOAD: Welcome email is non-critical. Queued after response.
+        emailQueue.add(() => sendWelcomeEmail(normalizedEmail, fullName.trim()));
+
+        return res.json({ 
             success: true, 
             message: "Account created successfully!",
             redirect: "/" 
         });
 
     } catch (error) {
-        console.error("❌ Signup Error:", error.message);
-        res.status(500).json({ 
+        // MongoDB duplicate key error (E11000) — atomic uniqueness enforcement
+        if (error.code === 11000 && error.keyPattern?.email) {
+            return res.status(409).json({ 
+                success: false, 
+                message: "Email already registered. Please login instead." 
+            });
+        }
+
+        console.error("Signup Error:", error);
+        return res.status(500).json({ 
             success: false, 
-            message: error.message || "Signup failed. Please try again." 
+            message: "Signup failed. Please try again." 
         });
     }
 });
@@ -313,18 +283,17 @@ router.post('/forgot-password', async (req, res) => {
             expires: tokenExpires 
         });
 
-        // FIX: Build reset link using request origin (works on Vercel & local)
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         const host = req.headers['x-forwarded-host'] || req.headers.host;
         const baseUrl = `${protocol}://${host}`;
         const resetLink = `${baseUrl}/user/reset-password?token=${resetToken}`;
         
-        console.log(`🔗 Generated reset link: ${resetLink}`);
+        console.log(`Generated reset link: ${resetLink}`);
 
         try {
             await sendResetPasswordEmail(normalizedEmail, resetLink);
         } catch (emailError) {
-            console.error("❌ Reset email failed:", emailError.message);
+            console.error("Reset email failed:", emailError.message);
             return res.status(500).json({ 
                 success: false, 
                 message: `Email service error: ${emailError.message}` 
@@ -337,7 +306,7 @@ router.post('/forgot-password', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Forgot Password Error:", error.message);
+        console.error("Forgot Password Error:", error.message);
         res.status(500).json({ 
             success: false, 
             message: error.message || "Failed to send reset link. Please try again." 
@@ -426,7 +395,7 @@ router.post('/reset-password', async (req, res) => {
 
         resetTokens.delete(token);
 
-        console.log(`🔐 Password reset successful for ${stored.email}`);
+        console.log(`Password reset successful for ${stored.email}`);
 
         res.json({ 
             success: true, 
@@ -435,7 +404,7 @@ router.post('/reset-password', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Reset Password Error:", error.message);
+        console.error("Reset Password Error:", error.message);
         res.status(500).json({ 
             success: false, 
             message: error.message || "Failed to reset password" 
@@ -463,7 +432,7 @@ setInterval(() => {
     }
 
     if (otpCleaned > 0 || tokenCleaned > 0) {
-        console.log(`🧹 Cleanup: Removed ${otpCleaned} expired OTPs, ${tokenCleaned} expired reset tokens`);
+        console.log(`Cleanup: Removed ${otpCleaned} expired OTPs, ${tokenCleaned} expired reset tokens`);
     }
 }, 5 * 60 * 1000);
 
