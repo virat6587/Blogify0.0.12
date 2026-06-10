@@ -6,7 +6,6 @@ class CommentWorker {
     this.redis = RedisClient.getInstance();
     this.isRunning = false;
     this.batchSize = 10;
-    this.maxWritesPerSecond = 20;
     this.sleepBetweenBatches = 500;
     this.processedCount = 0;
     this.failedCount = 0;
@@ -63,14 +62,16 @@ class CommentWorker {
     
     try {
       const comments = batch.map(item => ({
-        userId: item.userId,
-        blogId: item.blogId,
         content: item.content,
+        blog: item.blogId,
+        author: item.userId,
+        parentComment: item.parentCommentId || null,
         createdAt: item.timestamp || new Date(),
         status: 'active',
         likes: [],
         replies: [],
-        isEdited: false,
+        isApproved: true,
+        isDeleted: false,
         ingestedAt: new Date(),
         queueLatencyMs: Date.now() - new Date(item.timestamp).getTime()
       }));
