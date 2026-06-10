@@ -2,13 +2,13 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 // ====================== VALIDATE EMAIL CONFIG ======================
-console.log("\n🔍 Email Configuration Check:");
-console.log(`📧 EMAIL_USER: ${process.env.EMAIL_USER}`);
-console.log(`📧 EMAIL_PASSWORD set: ${!!process.env.EMAIL_PASSWORD}`);
-console.log(`📧 EMAIL_PASSWORD length: ${process.env.EMAIL_PASSWORD ? process.env.EMAIL_PASSWORD.length : 0}`);
+console.log("\nEmail Configuration Check:");
+console.log(`EMAIL_USER: ${process.env.EMAIL_USER}`);
+console.log(`EMAIL_PASSWORD set: ${!!process.env.EMAIL_PASSWORD}`);
+console.log(`EMAIL_PASSWORD length: ${process.env.EMAIL_PASSWORD ? process.env.EMAIL_PASSWORD.length : 0}`);
 
 if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    console.error("\n❌ CRITICAL ERROR ❌");
+    console.error("\nCRITICAL ERROR");
     console.error("Missing EMAIL_USER or EMAIL_PASSWORD in .env file");
     console.error("Please add them and restart the server\n");
 }
@@ -31,19 +31,19 @@ const transporter = nodemailer.createTransport({
 });
 
 // Verify transporter connection on startup
-console.log("\n📧 Testing Gmail SMTP Connection...\n");
+console.log("\nTesting Gmail SMTP Connection...\n");
 
 transporter.verify((error, success) => {
     if (error) {
-        console.error("\n❌ ============================================");
-        console.error("❌          EMAIL SERVICE FAILED");
-        console.error("❌ ============================================");
-        console.error(`❌ Error: ${error.message}`);
-        console.error(`❌ Code: ${error.code}`);
+        console.error("\n===========================================");
+        console.error("          EMAIL SERVICE FAILED");
+        console.error("===========================================");
+        console.error(`Error: ${error.message}`);
+        console.error(`Code: ${error.code}`);
         
         if (error.code === 'EAUTH') {
-            console.error("\n⚠️  AUTHENTICATION ERROR - Your credentials are wrong!");
-            console.error("\n📋 SOLUTION STEPS:");
+            console.error("\nAUTHENTICATION ERROR - Your credentials are wrong!");
+            console.error("\nSOLUTION STEPS:");
             console.error("   1. Go to https://myaccount.google.com/security");
             console.error("   2. Enable '2-Step Verification' (if not already enabled)");
             console.error("   3. Go to https://myaccount.google.com/apppasswords");
@@ -55,20 +55,20 @@ transporter.verify((error, success) => {
         }
         
         if (error.code === 'ESOCKET' || error.code === 'ETIMEDOUT') {
-            console.error("⚠️  NETWORK ERROR - Cannot connect to Gmail SMTP server");
+            console.error("NETWORK ERROR - Cannot connect to Gmail SMTP server");
             console.error("   Check your internet connection or firewall settings\n");
         }
         
-        console.error(`❌ Current EMAIL_USER: ${process.env.EMAIL_USER}`);
-        console.error(`❌ Current PASSWORD: ${process.env.EMAIL_PASSWORD ? '***' + process.env.EMAIL_PASSWORD.substring(process.env.EMAIL_PASSWORD.length - 4) : 'NOT SET'}`);
-        console.error("❌ ============================================\n");
+        console.error(`Current EMAIL_USER: ${process.env.EMAIL_USER}`);
+        console.error(`Current PASSWORD: ${process.env.EMAIL_PASSWORD ? '***' + process.env.EMAIL_PASSWORD.substring(process.env.EMAIL_PASSWORD.length - 4) : 'NOT SET'}`);
+        console.error("===========================================\n");
     } else {
-        console.log("\n✅ ============================================");
-        console.log("✅       EMAIL SERVICE CONNECTED");
-        console.log("✅ ============================================");
-        console.log(`✅ Email: ${process.env.EMAIL_USER}`);
-        console.log(`✅ Gmail SMTP is ready to send emails`);
-        console.log("✅ ============================================\n");
+        console.log("\n===========================================");
+        console.log("       EMAIL SERVICE CONNECTED");
+        console.log("===========================================");
+        console.log(`Email: ${process.env.EMAIL_USER}`);
+        console.log(`Gmail SMTP is ready to send emails`);
+        console.log("===========================================\n");
     }
 });
 
@@ -89,7 +89,7 @@ const sendOTPEmail = async (email, otp) => {
                     </div>
                     
                     <p style="color: #999; margin: 15px 0; font-size: 14px;">
-                        <strong>⏱️ This code expires in 5 minutes</strong>
+                        <strong>This code expires in 5 minutes</strong>
                     </p>
                     
                     <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
@@ -98,7 +98,7 @@ const sendOTPEmail = async (email, otp) => {
                         If you didn't request this code, please ignore this email.
                     </p>
                     <p style="color: #999; font-size: 12px; margin: 0;">
-                        © 2024 Blogify. All rights reserved.
+                        &copy; 2024 Blogify. All rights reserved.
                     </p>
                 </div>
             </div>
@@ -106,32 +106,32 @@ const sendOTPEmail = async (email, otp) => {
     };
 
     try {
-        console.log(`\n📧 ========== SENDING OTP EMAIL ==========`);
-        console.log(`📧 To: ${email}`);
-        console.log(`📧 OTP: ${otp}`);
-        console.log(`📧 From: ${process.env.EMAIL_USER}`);
+        console.log(`\n========== SENDING OTP EMAIL ==========`);
+        console.log(`To: ${email}`);
+        console.log(`OTP: ${otp}`);
+        console.log(`From: ${process.env.EMAIL_USER}`);
         
         const info = await transporter.sendMail(mailOptions);
-        console.log(`✅ SUCCESS - OTP sent!`);
-        console.log(`✅ Message ID: ${info.messageId}`);
-        console.log(`✅ Response: ${info.response}\n`);
+        console.log(`SUCCESS - OTP sent!`);
+        console.log(`Message ID: ${info.messageId}`);
+        console.log(`Response: ${info.response}\n`);
         return { success: true, message: 'OTP sent successfully' };
     } catch (error) {
-        console.error(`\n❌ ========== FAILED TO SEND OTP EMAIL ==========`);
-        console.error(`❌ To: ${email}`);
-        console.error(`❌ Error Message: ${error.message}`);
-        console.error(`❌ Error Code: ${error.code}`);
-        console.error(`❌ Error Response: ${error.response}`);
-        console.error(`❌ Full Error:`, error);
-        console.error(`❌ ============================================\n`);
+        console.error(`\n========== FAILED TO SEND OTP EMAIL ==========`);
+        console.error(`To: ${email}`);
+        console.error(`Error Message: ${error.message}`);
+        console.error(`Error Code: ${error.code}`);
+        console.error(`Error Response: ${error.response}`);
+        console.error(`Full Error:`, error);
+        console.error(`============================================\n`);
         
         if (error.code === 'EAUTH') {
-            console.error(`⚠️  AUTHENTICATION FAILED - Gmail credentials are incorrect!`);
+            console.error(`AUTHENTICATION FAILED - Gmail credentials are incorrect!`);
             console.error(`   Check your EMAIL_USER and EMAIL_PASSWORD in .env\n`);
         }
         
         if (error.code === 'ESOCKET' || error.code === 'ETIMEDOUT') {
-            console.error(`⚠️  NETWORK ERROR - Cannot reach Gmail SMTP server`);
+            console.error(`NETWORK ERROR - Cannot reach Gmail SMTP server`);
             console.error(`   Check your internet connection\n`);
         }
         
@@ -168,7 +168,7 @@ const sendResetPasswordEmail = async (email, resetLink) => {
                     </p>
                     
                     <p style="color: #e74c3c; font-weight: bold; margin: 15px 0; font-size: 14px;">
-                        ⏱️ This link will expire in 30 minutes
+                        This link will expire in 30 minutes
                     </p>
                     
                     <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
@@ -177,7 +177,7 @@ const sendResetPasswordEmail = async (email, resetLink) => {
                         If you didn't request this, please ignore this email and your password will remain unchanged.
                     </p>
                     <p style="color: #999; font-size: 12px; margin: 0;">
-                        © 2024 Blogify. All rights reserved.
+                        &copy; 2024 Blogify. All rights reserved.
                     </p>
                 </div>
             </div>
@@ -185,17 +185,17 @@ const sendResetPasswordEmail = async (email, resetLink) => {
     };
 
     try {
-        console.log(`\n📧 ========== SENDING PASSWORD RESET EMAIL ==========`);
-        console.log(`📧 To: ${email}`);
+        console.log(`\n========== SENDING PASSWORD RESET EMAIL ==========`);
+        console.log(`To: ${email}`);
         const info = await transporter.sendMail(mailOptions);
-        console.log(`✅ SUCCESS - Reset email sent!`);
-        console.log(`✅ Message ID: ${info.messageId}\n`);
+        console.log(`SUCCESS - Reset email sent!`);
+        console.log(`Message ID: ${info.messageId}\n`);
         return { success: true, message: 'Reset link sent successfully' };
     } catch (error) {
-        console.error(`\n❌ ========== FAILED TO SEND RESET EMAIL ==========`);
-        console.error(`❌ To: ${email}`);
-        console.error(`❌ Error: ${error.message}`);
-        console.error(`❌ Code: ${error.code}\n`);
+        console.error(`\n========== FAILED TO SEND RESET EMAIL ==========`);
+        console.error(`To: ${email}`);
+        console.error(`Error: ${error.message}`);
+        console.error(`Code: ${error.code}\n`);
         throw new Error(`Failed to send reset email: ${error.message}`);
     }
 };
@@ -230,7 +230,7 @@ const sendCommentNotificationEmail = async (recipientEmail, data) => {
                     <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
                     
                     <p style="color: #999; font-size: 12px; margin: 0;">
-                        © 2024 Blogify. All rights reserved.
+                        &copy; 2024 Blogify. All rights reserved.
                     </p>
                 </div>
             </div>
@@ -239,10 +239,10 @@ const sendCommentNotificationEmail = async (recipientEmail, data) => {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`✅ Comment notification sent to ${recipientEmail}`);
+        console.log(`Comment notification sent to ${recipientEmail}`);
         return { success: true };
     } catch (error) {
-        console.error(`❌ Failed to send comment notification: ${error.message}`);
+        console.error(`Failed to send comment notification: ${error.message}`);
         throw error;
     }
 };
@@ -275,7 +275,7 @@ const sendFollowNotificationEmail = async (recipientEmail, data) => {
                     <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
                     
                     <p style="color: #999; font-size: 12px; margin: 0;">
-                        © 2024 Blogify. All rights reserved.
+                        &copy; 2024 Blogify. All rights reserved.
                     </p>
                 </div>
             </div>
@@ -284,12 +284,34 @@ const sendFollowNotificationEmail = async (recipientEmail, data) => {
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`✅ Follow notification sent to ${recipientEmail}`);
+        console.log(`Follow notification sent to ${recipientEmail}`);
         return { success: true };
     } catch (error) {
-        console.error(`❌ Failed to send follow notification: ${error.message}`);
+        console.error(`Failed to send follow notification: ${error.message}`);
         throw error;
     }
+};
+
+// ====================== SEND WELCOME EMAIL (NEW) ======================
+const sendWelcomeEmail = async (email, fullName) => {
+    const mailOptions = {
+        from: `"Blogify" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "Welcome to Blogify!",
+        html: `
+            <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #6366f1;">Welcome aboard, ${fullName}!</h2>
+                <p>Your account has been created successfully. Start writing your first blog today.</p>
+                <a href="${process.env.APP_URL || 'http://localhost:8000'}/blogs/new" 
+                   style="display:inline-block; background:#6366f1; color:white; padding:12px 24px; border-radius:8px; text-decoration:none; margin-top:16px;">
+                    Write a Blog
+                </a>
+            </div>
+        `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Welcome email sent to ${email}`);
 };
 
 // ====================== GENERIC SEND EMAIL ======================
@@ -303,10 +325,10 @@ const sendEmail = async (to, subject, htmlContent) => {
 
     try {
         const info = await transporter.sendMail(mailOptions);
-        console.log(`✅ Email sent to ${to}`);
+        console.log(`Email sent to ${to}`);
         return { success: true, message: 'Email sent successfully' };
     } catch (error) {
-        console.error(`❌ Failed to send email: ${error.message}`);
+        console.error(`Failed to send email: ${error.message}`);
         throw new Error(`Email service error: ${error.message}`);
     }
 };
@@ -316,6 +338,6 @@ module.exports = {
     sendResetPasswordEmail,
     sendCommentNotificationEmail,
     sendFollowNotificationEmail,
-    sendEmail 
+    sendEmail,
+    sendWelcomeEmail
 };
-
