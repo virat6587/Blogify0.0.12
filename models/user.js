@@ -1,7 +1,10 @@
 const mongoose = require("mongoose");
 const { Schema, model } = mongoose;
-const { createHmac, randomBytes } = require("crypto");
+const bcrypt = require("bcrypt");
 const { creatTokenForUser } = require("../services/authentication");
+
+// Tuned for 50 RPS: ~50-100ms per hash, non-blocking via libuv thread pool
+const SALT_ROUNDS = 10;
 
 const UserSchema = new Schema({
     fullName: { 
@@ -16,7 +19,6 @@ const UserSchema = new Schema({
         lowercase: true,
         trim: true
     },
-    salt: { type: String },
     password: { type: String },
     googleId: { 
         type: String, 
@@ -28,7 +30,6 @@ const UserSchema = new Schema({
         default: "/imgs/default.png" 
     },
     
-    // Profile Enhancements
     bio: { 
         type: String, 
         default: "", 
@@ -51,7 +52,6 @@ const UserSchema = new Schema({
         default: "light"
     },
     
-    // Social Features
     followers: [{ 
         type: Schema.Types.ObjectId, 
         ref: "user" 
@@ -61,7 +61,6 @@ const UserSchema = new Schema({
         ref: "user" 
     }],
     
-    // Notification Settings
     notificationSettings: {
         emailOnComment: { type: Boolean, default: true },
         emailOnNewFollower: { type: Boolean, default: true },
@@ -70,8 +69,7 @@ const UserSchema = new Schema({
     
 }, { timestamps: true });
 
-// ====================== INDEXES ======================
-UserSchema.index({ email: 1 });
+// Only non-redundant indexes (unique: true on email already creates it)
 UserSchema.index({ followers: 1 });
 UserSchema.index({ following: 1 });
 
@@ -84,35 +82,23 @@ UserSchema.virtual("followingCount").get(function() {
     return this.following ? this.following.length : 0;
 });
 
-// ====================== PASSWORD HASHING ======================
-UserSchema.pre("save", async function (next) {
-    if (this.googleId || !this.password || !this.isModified("password")) {
-        return next();
-    }
-
-    try {
-        const salt = randomBytes(16).toString("hex");
-        this.salt = salt;
-        this.password = createHmac("sha256", salt)
-            .update(this.password)
-            .digest("hex");
-        next();
-    } catch (error) {
-        next(error);
-    }
+// ====================== PASSWORD HASHING (async bcrypt) ======================
+UserSchema.pre("save", async function() {
+    if (!this.password || !this.isModified("password") || this.googleId) return;
+    this.password = await bcrypt.hash(this.password, SALT_ROUNDS);
 });
 
 // ====================== STATIC METHODS ======================
 UserSchema.static("matchPassword", async function (email, password) {
-    const user = await this.findOne({ email: email.toLowerCase() });
+    const user = await this.findOne({ email: email.toLowerCase() })
+        .lean()
+        .select("_id email fullName profileImageURL role googleId password");
+    
     if (!user) throw new Error("User not found");
     if (!user.password) throw new Error("This account uses Google Sign-In");
 
-    const userProvidedHash = createHmac("sha256", user.salt)
-        .update(password)
-        .digest("hex");
-
-    if (user.password !== userProvidedHash) throw new Error("Incorrect Password");
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) throw new Error("Incorrect Password");
 
     return creatTokenForUser(user);
 });
@@ -128,14 +114,12 @@ UserSchema.static("findOrCreateGoogleUser", async function (profile) {
             user = await this.findOne({ email });
 
             if (user) {
-                // Link Google to existing account
                 user.googleId = googleId;
                 if (profile.photos?.[0]?.value) {
                     user.profileImageURL = profile.photos[0].value;
                 }
                 await user.save();
             } else {
-                // Create new user
                 user = await this.create({
                     fullName: profile.displayName || "Google User",
                     email: email,
@@ -147,7 +131,7 @@ UserSchema.static("findOrCreateGoogleUser", async function (profile) {
 
         return user;
     } catch (error) {
-        console.error("❌ findOrCreateGoogleUser Error:", error.message);
+        console.error("findOrCreateGoogleUser Error:", error.message);
         throw error;
     }
 });
