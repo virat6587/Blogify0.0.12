@@ -117,13 +117,21 @@ class RedisClient {
     const compressed = JSON.stringify({
       _id: blogData._id,
       title: blogData.title,
-      content: blogData.content,
+      body: blogData.body,
       author: blogData.author,
       tags: blogData.tags,
       likes: blogData.likes,
       viewCount: blogData.viewCount,
       createdAt: blogData.createdAt,
-      readingTime: blogData.readingTime
+      readingTime: blogData.readingTime,
+      coverImageURL: blogData.coverImageURL,
+      excerpt: blogData.excerpt,
+      metaDescription: blogData.metaDescription,
+      category: blogData.category,
+      status: blogData.status,
+      isFeatured: blogData.isFeatured,
+      featuredRank: blogData.featuredRank,
+      slug: blogData.slug
     });
     await this.client.setEx(key, ttlSeconds, compressed);
     return true;
@@ -134,6 +142,12 @@ class RedisClient {
     const key = `${this.keys.BLOG_CACHE_PREFIX}${blogId}`;
     const data = await this.client.get(key);
     return data ? JSON.parse(data) : null;
+  }
+
+  async invalidateBlogCache(blogId) {
+    if (!this.isConnected) return;
+    const key = `${this.keys.BLOG_CACHE_PREFIX}${blogId}`;
+    await this.client.del(key);
   }
 
   async disconnect() {
