@@ -5,12 +5,14 @@ const cookieParser = require("cookie-parser");
 const passport = require("passport");
 const { createHandler } = require("graphql-http/lib/use/express");
 
-// Markdown Parsing and Visual Highlighting Extensions
 const { Marked } = require("marked");
 const { markedHighlight } = require("marked-highlight");
 const hljs = require("highlight.js");
 
-// ====================== SUPPRESS MONGOOSE WARNINGS ======================
+// ====================== REDIS & WORKER IMPORTS ======================
+const RedisClient = require("./config/redis");
+const commentWorker = require("./workers/commentWorker");
+
 process.on('warning', (warning) => {
     if (warning.code === 'MONGOOSE' && warning.message.includes('Duplicate schema index')) {
         return;
@@ -38,7 +40,6 @@ const PORT = process.env.PORT || 8000;
 
 require("dotenv").config();
 
-// Initialize Marked Parser
 const marked = new Marked(
     markedHighlight({
         emptyLangClass: 'hljs',
@@ -50,11 +51,26 @@ const marked = new Marked(
     })
 );
 
-// ====================== MONGODB CONNECTION ======================
-mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/blogify")
-    .then(() => console.log("MongoDB Connected"))
+// ====================== REDIS CONNECTION ======================
+const redis = RedisClient.getInstance();
+redis.connect()
+    .then(() => {
+        console.log('[App] Redis ready');
+        commentWorker.start();
+    })
     .catch(err => {
-        console.error("MongoDB Connection Error:", err.message);
+        console.error('[App] Redis failed - running in degraded mode:', err.message);
+    });
+
+// ====================== MONGODB CONNECTION ======================
+mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/blogify", {
+    maxPoolSize: 50,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+})
+    .then(() => console.log("✅ MongoDB Connected"))
+    .catch(err => {
+        console.error("❌ MongoDB Connection Error:", err.message);
         process.exit(1);
     });
 
@@ -67,7 +83,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.resolve("./public")));
 
-// Security headers
 app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -136,6 +151,22 @@ app.all("/graphql", createHandler({
     context: (req) => ({ user: req.raw.user })
 }));
 
+// ====================== HEALTH CHECK ======================
+app.get("/health", async (req, res) => {
+    const redisStatus = redis.isConnected ? 'connected' : 'disconnected';
+    const queueDepth = redis.isConnected 
+        ? await redis.client.lLen(redis.keys.COMMENT_QUEUE)
+        : 'N/A';
+    
+    res.json({
+        status: 'ok',
+        redis: redisStatus,
+        queueDepth,
+        worker: commentWorker.getStats(),
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
+});
+
 // ====================== HOME ROUTE ======================
 app.get("/", async (req, res) => {
     try {
@@ -194,7 +225,7 @@ app.get("/", async (req, res) => {
             sort
         });
     } catch (error) {
-        console.error("Home Route Error:", error.message);
+        console.error("🚨 Home Route Error:", error.message);
         res.status(500).send("Internal Server Error");
     }
 });
@@ -217,13 +248,32 @@ app.use((req, res) => {
 
 // ====================== ERROR HANDLER ======================
 app.use((err, req, res, next) => {
-    console.error("Server Error:", err);
+    console.error("🚨 Server Error:", err);
     res.status(500).send("Internal Server Error");
 });
 
+// ====================== GRACEFUL SHUTDOWN ======================
+process.on('SIGTERM', async () => {
+    console.log('[App] SIGTERM received - shutting down gracefully');
+    commentWorker.stop();
+    await redis.disconnect();
+    await mongoose.disconnect();
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('[App] SIGINT received - shutting down gracefully');
+    commentWorker.stop();
+    await redis.disconnect();
+    await mongoose.disconnect();
+    process.exit(0);
+});
+
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Visit http://localhost:${PORT}`);
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`🌐 Visit http://localhost:${PORT}`);
+    console.log(`[App] Architecture: Queue-based writes (300 RPS), Cache-first reads (5min TTL)`);
+    console.log(`[App] MongoDB throttle: 20 ops/sec | Redis memory cap: 5000 queue items`);
 });
 
 module.exports = app;
