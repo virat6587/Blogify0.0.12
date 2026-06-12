@@ -144,7 +144,7 @@ app.locals.renderMarkdown = function(rawContent) {
     .replace(/pbr\\pul/g, "\n\n")
     .replace(/pbr\\p/g, "\n")
     .replace(/<<\\strong>/g, "**")
-    .replace(/< **/g, "**");
+    .replace(/< \*\*/g, "**");
   contentString = contentString.replace(/__BLOGIFY_CODE_BLOCK_PLACEHOLDER_(\d+)__/g, (match, index) => codeBlocks[parseInt(index)]);
   return marked.parse(contentString);
 };
