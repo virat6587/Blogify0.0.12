@@ -3,11 +3,11 @@ const router = express.Router();
 const Comment = require("../models/Comment");
 const Blog = require("../models/Blog");
 const { restrictToLoggedInUserOnly } = require("../middlewares/authentication");
-const { commentLimiter } = require("../middlewares/rateLimiting");
+const { commentLimiter, likeLimiter } = require("../middlewares/rateLimiting");
 const { validateComment, validateObjectId } = require("../middlewares/validation");
 const NotificationService = require("../services/notificationService");
 const RedisClient = require("../config/redis");
-const { commentLimiter, likeLimiter } = require("../middlewares/rateLimiting");
+
 const redis = RedisClient.getInstance();
 router.use(restrictToLoggedInUserOnly);
 
