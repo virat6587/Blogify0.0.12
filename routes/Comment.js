@@ -7,6 +7,7 @@ const { commentLimiter } = require("../middlewares/rateLimiting");
 const { validateComment, validateObjectId } = require("../middlewares/validation");
 const NotificationService = require("../services/notificationService");
 const RedisClient = require("../config/redis");
+const { commentLimiter, likeLimiter } = require("../middlewares/rateLimiting");
 
 const redis = RedisClient.getInstance();
 router.use(restrictToLoggedInUserOnly);
